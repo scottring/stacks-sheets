@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Reset Questions</title>
+</head>
+<body>
+  <div id="status"></div>
+  <script type="module">
+    import { deleteAllData, initializeSupplierQuestions } from '../services/questions';
+
+    const statusDiv = document.getElementById('status');
+
+    async function resetQuestions() {
+      try {
+        statusDiv.innerHTML = '<p>Deleting existing data...</p>';
+        await deleteAllData();
+        statusDiv.innerHTML += '<p>Data deleted successfully</p>';
+        
+        statusDiv.innerHTML += '<p>Initializing new questions...</p>';
+        await initializeSupplierQuestions();
+        statusDiv.innerHTML += '<p>Questions initialized successfully</p>';
+        
+        console.log('Questions reset successfully');
+      } catch (error) {
+        console.error('Error resetting questions:', error);
+        statusDiv.innerHTML += `<p style="color: red">Error: ${error.message}</p>`;
+      }
+    }
+
+    resetQuestions();
+  </script>
+</body>
+</html>

@@ -46,6 +46,7 @@ interface ImportQuestionsModalProps {
   onQuestionsImported: () => void;
   tags: QuestionTag[];
   sections: QuestionSection[];
+  collectionId?: string;
 }
 
 export const ImportQuestionsModal = ({
@@ -54,6 +55,7 @@ export const ImportQuestionsModal = ({
   onQuestionsImported,
   tags,
   sections,
+  collectionId,
 }: ImportQuestionsModalProps) => {
   const toast = useToast();
   const [isProcessing, setIsProcessing] = useState(false);
@@ -91,11 +93,22 @@ export const ImportQuestionsModal = ({
   };
 
   const handleImport = async () => {
+    if (!collectionId) {
+      toast({
+        title: 'Error importing questions',
+        description: 'No collection selected',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+      return;
+    }
+
     setIsProcessing(true);
     setError(null);
     try {
       for (const question of processedQuestions) {
-        await addQuestion(question);
+        await addQuestion(question, collectionId);
       }
       
       toast({
@@ -162,6 +175,13 @@ export const ImportQuestionsModal = ({
         <ModalCloseButton />
         <ModalBody>
           <VStack spacing={6}>
+            {!collectionId && (
+              <Alert status="warning">
+                <AlertIcon />
+                Please select a collection before importing questions.
+              </Alert>
+            )}
+
             {error && (
               <Alert status="error" variant="left-accent">
                 <AlertIcon />
@@ -334,6 +354,7 @@ export const ImportQuestionsModal = ({
               colorScheme="green"
               onClick={handleImport}
               isLoading={isProcessing}
+              isDisabled={!collectionId}
             >
               Import {processedQuestions.length} Questions
             </Button>

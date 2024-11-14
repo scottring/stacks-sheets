@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Import Questions</title>
+</head>
+<body>
+  <div id="status"></div>
+  <script type="module">
+    import { initializeSupplierQuestions } from '../services/questions';
+
+    const statusDiv = document.getElementById('status');
+
+    async function importQuestions() {
+      try {
+        statusDiv.innerHTML = '<p>Starting import...</p>';
+        await initializeSupplierQuestions();
+        statusDiv.innerHTML += '<p>Questions imported successfully</p>';
+        console.log('Questions imported successfully');
+      } catch (error) {
+        console.error('Error importing questions:', error);
+        statusDiv.innerHTML += `<p style="color: red">Error: ${error.message}</p>`;
+      }
+    }
+
+    importQuestions();
+  </script>
+</body>
+</html>

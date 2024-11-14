@@ -27,6 +27,18 @@ export const QuestionSchema = z.object({
   updatedAt: z.date()
 });
 
+export const QuestionGroupSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1, "Group name is required"),
+  description: z.string().optional(),
+  tier: z.enum(["Tier 1", "Tier 2", "Tier 3", "Tier 4"]),
+  category: z.string().min(1, "Category is required"),
+  order: z.number().int().min(0),
+  createdAt: z.date(),
+  updatedAt: z.date()
+});
+
 export type QuestionTag = z.infer<typeof QuestionTagSchema>;
 export type QuestionSection = z.infer<typeof QuestionSectionSchema>;
 export type Question = z.infer<typeof QuestionSchema>;
+export type QuestionGroup = z.infer<typeof QuestionGroupSchema>;

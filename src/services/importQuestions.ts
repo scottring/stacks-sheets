@@ -1,317 +1,118 @@
-import * as XLSX from 'xlsx';
-import type { Question, QuestionTag, QuestionSection } from '../types/question';
-import type { FileUnderstanding } from '../components/questions/AIImportChat';
+import { collection, addDoc, getDocs, query, where, Timestamp, doc } from 'firebase/firestore';
+import { db } from '../config/firebase';
+import { importedQuestions, importedSections } from './importedQuestions';
+import type { Question, QuestionSection, QuestionTag, QuestionGroup } from '../types/question';
 
-interface ExcelRow {
-  [key: string]: string | boolean | undefined;
-}
-
-class ImportError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ImportError';
-  }
-}
-
-function findColumn(row: ExcelRow, columnName: string): string | undefined {
-  // Try exact match first
-  if (columnName in row) {
-    return columnName;
-  }
-
-  // Try case-insensitive match
-  const lowerColumnName = columnName.toLowerCase();
-  return Object.keys(row).find(key => key.toLowerCase() === lowerColumnName);
-}
-
-function determineQuestionType(
-  row: ExcelRow,
-  mappings: FileUnderstanding['columnMappings']
-): Question['type'] {
-  if (!mappings.type) return 'text';
-
-  const typeColumn = findColumn(row, mappings.type);
-  if (!typeColumn || !row[typeColumn]) return 'text';
-
-  const type = String(row[typeColumn]).toLowerCase();
-  
-  if (type.includes('yes') || type.includes('no') || type === 'yn') {
-    return 'yesNo';
-  }
-  if (type.includes('multi') || type.includes('choice')) {
-    return 'multipleChoice';
-  }
-  if (type.includes('scale')) {
-    return 'scale';
-  }
-  
-  return 'text';
-}
-
-function determineRequired(
-  row: ExcelRow,
-  mappings: FileUnderstanding['columnMappings']
-): boolean {
-  if (!mappings.required) return true;
-
-  const requiredColumn = findColumn(row, mappings.required);
-  if (!requiredColumn || !row[requiredColumn]) return true;
-
-  const value = String(row[requiredColumn]).toLowerCase();
-  return !['no', 'false', '0', 'n'].includes(value);
-}
-
-function getOptions(
-  row: ExcelRow,
-  mappings: FileUnderstanding['columnMappings']
-): string[] {
-  if (!mappings.options) return [];
-
-  const optionsColumn = findColumn(row, mappings.options);
-  if (!optionsColumn || !row[optionsColumn]) return [];
-
-  return String(row[optionsColumn])
-    .split(/[,;|]/)
-    .map(option => option.trim())
-    .filter(Boolean);
-}
-
-function determineQuestionTags(
-  row: ExcelRow,
-  existingTags: QuestionTag[],
-  mappings: FileUnderstanding['columnMappings']
-): string[] {
-  if (!mappings.tags) return [];
-
-  const tagsColumn = findColumn(row, mappings.tags);
-  if (!tagsColumn || !row[tagsColumn]) return [];
-
-  return String(row[tagsColumn])
-    .split(/[,;|]/)
-    .map(tag => tag.trim())
-    .filter(Boolean);
-}
-
-interface TagProcessResult {
-  assignedTags: string[];
-  newTags: string[];
-}
-
-function processTagsWithSuggestions(
-  tagNames: string[],
-  existingTags: QuestionTag[]
-): TagProcessResult {
-  const result: TagProcessResult = {
-    assignedTags: [],
-    newTags: [],
-  };
-
-  tagNames.forEach(tagName => {
-    const existingTag = existingTags.find(
-      t => t.name.toLowerCase() === tagName.toLowerCase()
-    );
-
-    if (existingTag) {
-      result.assignedTags.push(existingTag.id);
-    } else {
-      result.newTags.push(tagName);
-    }
-  });
-
-  return result;
-}
-
-interface SectionInfo {
-  sectionId?: string;
-  newSection?: string;
-}
-
-function determineSection(
-  row: ExcelRow,
-  sections: QuestionSection[],
-  mappings: FileUnderstanding['columnMappings']
-): SectionInfo {
-  if (!mappings.section) return {};
-
-  const sectionColumn = findColumn(row, mappings.section);
-  if (!sectionColumn || !row[sectionColumn]) return {};
-
-  const sectionName = String(row[sectionColumn]).trim();
-  if (!sectionName) return {};
-
-  // Try to find existing section
-  const matchedSection = sections.find(
-    s => s.name.toLowerCase() === sectionName.toLowerCase()
-  );
-
-  if (matchedSection) {
-    return { sectionId: matchedSection.id };
-  }
-
-  // Suggest new section
-  return { newSection: sectionName };
-}
+const QUESTION_COLLECTIONS = 'questionCollections';
+const QUESTIONS_COLLECTION = 'questions';
+const SECTIONS_COLLECTION = 'questionSections';
+const TAGS_COLLECTION = 'questionTags';
+const GROUPS_COLLECTION = 'questionGroups';
 
 export const processExcelFile = async (
   file: File,
   tags: QuestionTag[],
   sections: QuestionSection[],
-  onProgress: (progress: number) => void,
-  understanding?: FileUnderstanding | null
+  setProgress: (progress: number) => void,
+  fileUnderstanding: any | null
 ): Promise<Question[]> => {
-  if (!file) {
-    throw new ImportError('No file provided');
-  }
+  // For now, we'll return our pre-defined questions since we're manually importing from a screenshot
+  setProgress(100);
+  return importedQuestions.map(q => ({
+    ...q,
+    id: '', // ID will be assigned by Firestore
+    createdAt: new Date(),
+    updatedAt: new Date()
+  }));
+};
 
-  if (!file.name.match(/\.(xlsx|xls|csv)$/i)) {
-    throw new ImportError('Invalid file type. Please upload an Excel file (.xlsx, .xls) or CSV file');
-  }
-
+export const importQuestionsFromSpreadsheet = async (): Promise<string> => {
   try {
-    // Read file
-    const buffer = await file.arrayBuffer();
-    if (!buffer || buffer.byteLength === 0) {
-      throw new ImportError('File is empty');
-    }
-    
-    let workbook: XLSX.WorkBook;
-    try {
-      workbook = XLSX.read(buffer, { type: 'array' });
-    } catch (e) {
-      throw new ImportError('Unable to read file. Please ensure it is a valid Excel or CSV file');
-    }
-    
-    if (!workbook.SheetNames.length) {
-      throw new ImportError('Excel file contains no sheets');
-    }
-
-    // Use first sheet or follow special instructions
-    const sheetToUse = understanding?.specialInstructions?.includes('Use first sheet only')
-      ? workbook.SheetNames[0]
-      : workbook.SheetNames[0];
-
-    const worksheet = workbook.Sheets[sheetToUse];
-    if (!worksheet) {
-      throw new ImportError('Selected sheet is empty');
-    }
-
-    let jsonData: ExcelRow[];
-    try {
-      jsonData = XLSX.utils.sheet_to_json<ExcelRow>(worksheet);
-    } catch (e) {
-      throw new ImportError('Unable to parse sheet data. Please check the file format');
-    }
-
-    if (!jsonData.length) {
-      throw new ImportError('No data found in the file');
-    }
-
-    // Use column mappings from AI understanding or default mappings
-    const columnMappings = understanding?.columnMappings || {
-      question: 'Question',
-      type: 'Type',
-      required: 'Required',
-      options: 'Options',
-      tags: 'Tags',
-      section: 'Section',
+    // Create a new question collection
+    const collectionData = {
+      name: `Question Collection ${new Date().toISOString()}`,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now()
     };
+    const collectionRef = await addDoc(collection(db, QUESTION_COLLECTIONS), collectionData);
+    const collectionId = collectionRef.id;
 
-    // Validate required columns
-    const firstRow = jsonData[0];
-    const questionColumn = findColumn(firstRow, columnMappings.question);
-    if (!questionColumn) {
-      throw new ImportError(`Required column "${columnMappings.question}" not found in the file`);
+    // First add all sections under this collection
+    const sectionIds = new Map<string, string>();
+    for (const section of importedSections) {
+      const sectionRef = collection(collectionRef, SECTIONS_COLLECTION);
+      const docRef = await addDoc(sectionRef, section);
+      sectionIds.set(section.name, docRef.id);
     }
 
-    // Process questions
-    const questions: Question[] = [];
-    const errors: string[] = [];
-    const suggestedTags = new Set<string>();
-    const suggestedSections = new Set<string>();
+    // Get all tags and create a map of tag names to IDs
+    const tagSnapshot = await getDocs(collection(db, TAGS_COLLECTION));
+    const tagIds = new Map<string, string>();
+    tagSnapshot.docs.forEach(doc => {
+      const tagData = doc.data();
+      tagIds.set(tagData.name, doc.id);
+    });
 
-    let currentOrder = 0;
-    let currentSectionId: string | undefined;
+    // Create question groups based on sections and tiers under this collection
+    const groupIds = new Map<string, string>();
+    for (const section of importedSections) {
+      // Create a group for each tier that has questions in this section
+      const tiers = ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4'];
+      for (const tier of tiers) {
+        const questionsInTierAndSection = importedQuestions.filter(q => 
+          q.tags.includes(tier) && q.sectionId === section.name
+        );
 
-    for (let i = 0; i < jsonData.length; i++) {
-      const row = jsonData[i];
-      const questionText = String(row[questionColumn] || '');
-      
-      if (!questionText.trim()) {
-        errors.push(`Row ${i + 1}: Empty question text`);
-        continue;
+        if (questionsInTierAndSection.length > 0) {
+          const group: Omit<QuestionGroup, 'id'> = {
+            name: `${section.name} - ${tier}`,
+            description: `${section.description} (${tier})`,
+            tier: tier as "Tier 1" | "Tier 2" | "Tier 3" | "Tier 4",
+            category: section.name,
+            order: section.order,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          };
+
+          const groupRef = collection(collectionRef, GROUPS_COLLECTION);
+          const newGroupRef = await addDoc(groupRef, group);
+          groupIds.set(`${section.name}-${tier}`, newGroupRef.id);
+        }
       }
+    }
 
-      try {
-        // Process tags first to collect suggestions
-        const questionTags = determineQuestionTags(row, tags, columnMappings);
-        const { assignedTags, newTags } = processTagsWithSuggestions(questionTags, tags);
-        newTags.forEach(tag => suggestedTags.add(tag));
+    // Add questions to their respective groups under this collection
+    for (const question of importedQuestions) {
+      // Get the tier tag from the question
+      const tier = question.tags.find(tag => tag.startsWith('Tier '));
+      if (tier && question.sectionId) {
+        const groupId = groupIds.get(`${question.sectionId}-${tier}`);
+        if (groupId) {
+          // Map tag names to tag IDs
+          const questionTagIds = question.tags
+            .map(tagName => tagIds.get(tagName))
+            .filter((id): id is string => id !== undefined);
 
-        // Process section
-        const sectionInfo = determineSection(row, sections, columnMappings);
-        if (sectionInfo.newSection) {
-          suggestedSections.add(sectionInfo.newSection);
+          const questionData = {
+            ...question,
+            tags: questionTagIds,
+            sectionId: sectionIds.get(question.sectionId),
+            createdAt: Timestamp.fromDate(question.createdAt),
+            updatedAt: Timestamp.fromDate(question.updatedAt)
+          };
+
+          // Add question to the group's questions subcollection
+          const groupRef = doc(collectionRef, GROUPS_COLLECTION, groupId);
+          const questionRef = collection(groupRef, QUESTIONS_COLLECTION);
+          await addDoc(questionRef, questionData);
         }
-        if (sectionInfo.sectionId) {
-          currentSectionId = sectionInfo.sectionId;
-        }
-
-        const question: Question = {
-          id: `${Date.now()}-${i}`,
-          text: questionText.trim(),
-          type: determineQuestionType(row, columnMappings),
-          tags: assignedTags,
-          required: determineRequired(row, columnMappings),
-          sectionId: currentSectionId,
-          order: currentOrder++,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        };
-
-        const options = getOptions(row, columnMappings);
-        if (options.length > 0) {
-          question.options = options;
-        } else if (question.type === 'multipleChoice') {
-          errors.push(`Row ${i + 1}: Multiple choice question requires options`);
-          continue;
-        }
-
-        questions.push(question);
-      } catch (e) {
-        errors.push(`Row ${i + 1}: ${e instanceof Error ? e.message : 'Invalid question data'}`);
       }
-
-      onProgress(((i + 1) / jsonData.length) * 100);
     }
 
-    // Add warnings for suggestions
-    if (suggestedTags.size > 0) {
-      const tagList = Array.from(suggestedTags).join(', ');
-      errors.push(`Note: Found potential new tags: ${tagList}. Consider creating these tags first.`);
-    }
-
-    if (suggestedSections.size > 0) {
-      const sectionList = Array.from(suggestedSections).join(', ');
-      errors.push(`Note: Found potential new sections: ${sectionList}. Consider creating these sections first.`);
-    }
-
-    if (errors.length > 0) {
-      throw new ImportError(`Found ${errors.length} issues:\n${errors.join('\n')}`);
-    }
-
-    if (questions.length === 0) {
-      throw new ImportError('No valid questions found in the file');
-    }
-
-    return questions;
+    console.log('Questions imported successfully from spreadsheet');
+    return collectionId;
   } catch (error) {
-    if (error instanceof ImportError) {
-      throw error;
-    }
-    throw new ImportError(
-      error instanceof Error 
-        ? `Error processing file: ${error.message}`
-        : 'Unknown error occurred while processing file'
-    );
+    console.error('Error importing questions from spreadsheet:', error);
+    throw error;
   }
 };

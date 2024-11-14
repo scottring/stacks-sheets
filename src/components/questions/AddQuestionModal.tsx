@@ -29,6 +29,16 @@ interface AddQuestionModalProps {
   onClose: () => void;
   onQuestionAdded: () => void;
   tags: QuestionTag[];
+  collectionId?: string;
+}
+
+type QuestionType = "text" | "yesNo" | "multipleChoice" | "scale";
+
+interface FormData {
+  text: string;
+  type: QuestionType;
+  tags: string[];
+  required: boolean;
 }
 
 export const AddQuestionModal = ({
@@ -36,18 +46,29 @@ export const AddQuestionModal = ({
   onClose,
   onQuestionAdded,
   tags,
+  collectionId,
 }: AddQuestionModalProps) => {
   const toast = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<FormData>({
     text: '',
     type: 'text',
-    tags: [] as string[],
+    tags: [],
     required: true,
   });
 
   const handleSubmit = async () => {
+    if (!collectionId) {
+      toast({
+        title: 'Error adding question',
+        description: 'No collection selected',
+        status: 'error',
+        duration: 5000,
+      });
+      return;
+    }
+
     setIsLoading(true);
     setErrors({});
 
@@ -71,7 +92,7 @@ export const AddQuestionModal = ({
         return;
       }
 
-      await addQuestion(newQuestion);
+      await addQuestion(newQuestion, collectionId);
       
       toast({
         title: 'Question added successfully',
@@ -108,6 +129,13 @@ export const AddQuestionModal = ({
     }));
   };
 
+  const handleTypeChange = (value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      type: value as QuestionType
+    }));
+  };
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="xl">
       <ModalOverlay />
@@ -130,7 +158,7 @@ export const AddQuestionModal = ({
               <FormLabel>Question Type</FormLabel>
               <Select
                 value={formData.type}
-                onChange={(e) => setFormData(prev => ({ ...prev, type: e.target.value }))}
+                onChange={(e) => handleTypeChange(e.target.value)}
               >
                 <option value="text">Text</option>
                 <option value="yesNo">Yes/No</option>
@@ -180,6 +208,7 @@ export const AddQuestionModal = ({
             colorScheme="green"
             onClick={handleSubmit}
             isLoading={isLoading}
+            isDisabled={!collectionId}
           >
             Add Question
           </Button>

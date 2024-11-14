@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs } from 'firebase/firestore';
+import { collection, addDoc, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import type { Tag } from '../types/tag';
 
@@ -14,5 +14,27 @@ export const getTags = async (): Promise<Tag[]> => {
   } catch (error) {
     console.error('Error fetching tags:', error);
     throw new Error(error instanceof Error ? error.message : 'Failed to fetch tags');
+  }
+};
+
+export const addTag = async (tag: Omit<Tag, 'id'>): Promise<Tag> => {
+  try {
+    const docRef = await addDoc(collection(db, TAGS_COLLECTION), tag);
+    return {
+      id: docRef.id,
+      ...tag
+    };
+  } catch (error) {
+    console.error('Error adding tag:', error);
+    throw new Error(error instanceof Error ? error.message : 'Failed to add tag');
+  }
+};
+
+export const deleteTag = async (tagId: string): Promise<void> => {
+  try {
+    await deleteDoc(doc(db, TAGS_COLLECTION, tagId));
+  } catch (error) {
+    console.error('Error deleting tag:', error);
+    throw new Error(error instanceof Error ? error.message : 'Failed to delete tag');
   }
 };
